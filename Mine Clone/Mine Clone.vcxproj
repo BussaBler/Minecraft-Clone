@@ -161,10 +161,17 @@
     <ClInclude Include="Game.h" />
     <ClInclude Include="Generation.h" />
     <ClInclude Include="Noise.h" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="TupleHash.h" />
     <ClInclude Include="Vec3Hash.h" />
     <ClInclude Include="VkContext.h" />
     <ClInclude Include="VulkanIncludes.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Mine Clone.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\..\..\..\..\Downloads\mine.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -93,8 +93,11 @@ void Generation::generateChunkData(std::vector<BLOCKS>& blocks, glm::vec3& pos, 
 }
 
 void static placeTree(int x, int y, int z, std::vector<BLOCKS>& blocks, int size) {
-    int trunkHeight = 4 + (rand() % 3);  // Random trunk height between 4 and 6
-    int canopyHeight = trunkHeight - 1;
+    int seed = x * 73856093 ^ y * 19349663 ^ z * 83492791;
+    std::srand(seed);
+
+    int trunkHeight = 4 + 1; // (std::rand() % 3);
+    int canopyStartHeight = z + trunkHeight - 1;
 
     for (int i = 0; i < trunkHeight; i++) {
         if (x >= 0 && x < size && y >= 0 && y < size && z + i >= 0 && z + i < size) {
@@ -102,19 +105,49 @@ void static placeTree(int x, int y, int z, std::vector<BLOCKS>& blocks, int size
         }
     }
 
-    int canopyRadius = 2;  // Leaves extend 2 blocks around the trunk
-    for (int dx = -canopyRadius; dx <= canopyRadius; dx++) {
-        for (int dy = -canopyRadius; dy <= canopyRadius; dy++) {
-            for (int dz = -canopyRadius; dz <= canopyRadius; dz++) {
-                if (dx * dx + dy * dy + dz * dz <= canopyRadius * canopyRadius) {  // Circular canopy
-                    int leafX = x + dx;
-                    int leafY = y + dy;
-                    int leafZ = z + canopyHeight + dz;
+    if (z + trunkHeight + 1 >= 0 && z + trunkHeight + 1 < size) {
+        if (x >= 0 && x < size && y >= 0 && y < size)
+            blocks[x + y * size + (z + trunkHeight + 1) * size * size] = OAK_LEAVES_BLOCK;
+        if (x + 1 >= 0 && x + 1 < size && y >= 0 && y < size)
+            blocks[(x + 1) + y * size + (z + trunkHeight + 1) * size * size] = OAK_LEAVES_BLOCK;
+        if (x - 1 >= 0 && x - 1 < size && y >= 0 && y < size)
+            blocks[(x - 1) + y * size + (z + trunkHeight + 1) * size * size] = OAK_LEAVES_BLOCK;
+        if (x >= 0 && x < size && y + 1 >= 0 && y + 1 < size)
+            blocks[x + (y + 1) * size + (z + trunkHeight + 1) * size * size] = OAK_LEAVES_BLOCK;
+        if (x >= 0 && x < size && y - 1 >= 0 && y - 1 < size)
+            blocks[x + (y - 1) * size + (z + trunkHeight + 1) * size * size] = OAK_LEAVES_BLOCK;
+    }
 
-                    if (leafX >= 0 && leafX < size && leafY >= 0 && leafY < size && leafZ >= 0 && leafZ < size) {
-                        if (!(dx == 0 && dy == 0)) {  // Avoid replacing the trunk with leaves
-                            blocks[leafX + leafY * size + leafZ * size * size] = OAK_LEAVES_BLOCK;
-                        }
+    int diagonalLeaves = 1 + (std::rand() % 3);
+    if (z + trunkHeight >= 0 && z + trunkHeight < size) {
+        if (x >= 0 && x < size && y >= 0 && y < size)
+            blocks[x + y * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (x + 1 >= 0 && x + 1 < size && y >= 0 && y < size)
+            blocks[(x + 1) + y * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (x - 1 >= 0 && x - 1 < size && y >= 0 && y < size)
+            blocks[(x - 1) + y * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (x >= 0 && x < size && y + 1 >= 0 && y + 1 < size)
+            blocks[x + (y + 1) * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (x >= 0 && x < size && y - 1 >= 0 && y - 1 < size)
+            blocks[x + (y - 1) * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (diagonalLeaves >= 1 && x + 1 >= 0 && x + 1 < size && y + 1 >= 0 && y + 1 < size)
+            blocks[(x + 1) + (y + 1) * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (diagonalLeaves >= 2 && x - 1 >= 0 && x - 1 < size && y - 1 >= 0 && y - 1 < size)
+            blocks[(x - 1) + (y - 1) * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+        if (diagonalLeaves >= 3 && x + 1 >= 0 && x + 1 < size && y - 1 >= 0 && y - 1 < size)
+            blocks[(x + 1) + (y - 1) * size + (z + trunkHeight) * size * size] = OAK_LEAVES_BLOCK;
+    }
+
+    for (int dz = 0; dz < 2; dz++) {
+        int currentHeight = z + trunkHeight - 1 - dz;
+        if (currentHeight >= 0 && currentHeight < size) {
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dy = -2; dy <= 2; dy++) {
+                    if (abs(dx) + abs(dy) <= 2) {
+                        int leafX = x + dx;
+                        int leafY = y + dy;
+                        if (leafX >= 0 && leafX < size && leafY >= 0 && leafY < size)
+                            blocks[leafX + leafY * size + currentHeight * size * size] = OAK_LEAVES_BLOCK;
                     }
                 }
             }

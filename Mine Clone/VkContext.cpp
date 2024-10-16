@@ -14,6 +14,9 @@ float lastX = WIDTH / 2.0f;
 float lastY = HEIGHT / 2.0f;
 float fov = 45.0f;
 
+bool mouseLeft = false;
+bool mouseRight = false;
+
 #ifdef NDEBUG
 const bool enableValidationLayers = false;
 #else
@@ -112,6 +115,80 @@ void VkContext::processInput(GLFWwindow* pWindow, Game* pGame) {
     if (glfwGetKey(pWindow, GLFW_KEY_D) == GLFW_PRESS)
         pGame->worldCamera.pos += glm::normalize(glm::cross(pGame->worldCamera.forwards, pGame->worldCamera.up)) * cameraSpeed;
 
+    bool isMouseLeftPressed = glfwGetMouseButton(pWindow, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+
+    if (isMouseLeftPressed && !mouseLeft) {
+        
+        HitResult result = pGame->raycastBlock();
+        if (result.face >= 0) {
+
+            glm::vec3 rayHit = result.pos;
+
+            glm::vec3 currentChunkPos = floor(rayHit / (float)CHUNK_SIZE);
+            std::tuple<int, int, int> currentChunk = { currentChunkPos.x, currentChunkPos.y, currentChunkPos.z };
+
+            Chunk& chunk = pGame->worldChunks.find(currentChunk)->second;
+
+            glm::vec3 chunkWorldPos = currentChunkPos * static_cast<float>(CHUNK_SIZE);
+            glm::vec3 localBlockPos = rayHit - chunkWorldPos;
+
+            localBlockPos.x = static_cast<int>(localBlockPos.x) % CHUNK_SIZE;
+            localBlockPos.y = static_cast<int>(localBlockPos.y) % CHUNK_SIZE;
+            localBlockPos.z = static_cast<int>(localBlockPos.z) % CHUNK_SIZE;
+
+            chunk.removeBlock(localBlockPos, pGame->worldChunks);
+        }
+    }
+
+    mouseLeft = isMouseLeftPressed;
+
+    bool isMouseRightPressed = glfwGetMouseButton(pWindow, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+    if (isMouseRightPressed && !mouseRight) {
+
+        HitResult result = pGame->raycastBlock();
+        if (result.face >= 0) {
+
+            glm::vec3 rayHit = result.pos;
+
+            switch (result.face) {
+            case 0: // Left face
+                rayHit.x -= 1.0f;
+                break;
+            case 1: // Right face
+                rayHit.x += 1.0f;
+                break;
+            case 2: // Back face
+                rayHit.y -= 1.0f;
+                break;
+            case 3: // Front face
+                rayHit.y += 1.0f;
+                break;
+            case 4: // Bottom face
+                rayHit.z -= 1.0f;
+                break;
+            case 5: // Top face
+                rayHit.z += 1.0f;
+                break;
+            }
+
+            glm::vec3 currentChunkPos = floor(rayHit / (float)CHUNK_SIZE);
+            std::tuple<int, int, int> currentChunk = { currentChunkPos.x, currentChunkPos.y, currentChunkPos.z };
+
+            Chunk& chunk = pGame->worldChunks.find(currentChunk)->second;
+
+            glm::vec3 chunkWorldPos = currentChunkPos * static_cast<float>(CHUNK_SIZE);
+            glm::vec3 localBlockPos = rayHit - chunkWorldPos;
+
+            localBlockPos.x = static_cast<int>(localBlockPos.x) % CHUNK_SIZE;
+            localBlockPos.y = static_cast<int>(localBlockPos.y) % CHUNK_SIZE;
+            localBlockPos.z = static_cast<int>(localBlockPos.z) % CHUNK_SIZE;
+
+            chunk.addBlock(localBlockPos, DIRT_BLOCK, pGame->worldChunks);
+        }
+    }
+
+    mouseRight = isMouseRightPressed;
 }
 
 void VkContext::initWindow(VkContext* pContext, Game* pGame) {
@@ -670,12 +747,12 @@ static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions
 
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[0].offset = offsetof(Vertex, pos);
+    attributeDescriptions[0].format = VK_FORMAT_R8G8B8_UINT;
+    attributeDescriptions[0].offset = offsetof(Vertex, posX);
 
     attributeDescriptions[1].binding = 0;
     attributeDescriptions[1].location = 1;
-    attributeDescriptions[1].format = VK_FORMAT_R16G16_UNORM;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[1].offset = offsetof(Vertex, texCoord);
 
     attributeDescriptions[2].binding = 0;
@@ -775,6 +852,11 @@ static void createGraphicsPipeline(VkContext* pContext) {
     colorBlending.blendConstants[2] = 0.0f;
     colorBlending.blendConstants[3] = 0.0f;
 
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; 
+    pushConstantRange.offset = 0;     
+    pushConstantRange.size = sizeof(glm::vec3);
+
     std::vector<VkDynamicState> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR
@@ -788,6 +870,8 @@ static void createGraphicsPipeline(VkContext* pContext) {
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &pContext->descriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(pContext->device, &pipelineLayoutInfo, nullptr, &pContext->pipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create pipeline layout!");
@@ -1231,14 +1315,19 @@ static void createBuffersForChunk(VkContext* pContext, Chunk& chunk) {
     size_t vertexBufferSize = chunk.mesh.vertices.size() * sizeof(Vertex);
     size_t indexBufferSize = chunk.mesh.indices.size() * sizeof(uint32_t);
 
-    createBuffer(vertexBufferSize,
+    size_t maxVertexBufferSize = chunk.size * chunk.size * chunk.size * sizeof(Vertex) * 24;
+    size_t maxIndexBufferSize = chunk.size * chunk.size * chunk.size * sizeof(uint32_t) * 36;
+
+    if (chunk.vertexBuffer == VK_NULL_HANDLE)
+    createBuffer(maxVertexBufferSize,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         chunk.vertexBuffer,
         chunk.vertexBufferMemory,
         pContext);
 
-    createBuffer(indexBufferSize,
+    if (chunk.indexBuffer == VK_NULL_HANDLE)
+    createBuffer(maxIndexBufferSize,
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
         chunk.indexBuffer,
@@ -1506,6 +1595,7 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageInd
         }
         else if (chunk.second.baked && chunk.second.mesh.vertices.size() > 0) {
             vertexBuffers[0] = { chunk.second.vertexBuffer };
+            vkCmdPushConstants(commandBuffer, pContext->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &chunk.second.pos);
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(commandBuffer, chunk.second.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(commandBuffer, chunk.second.mesh.indices.size(), 1, 0, 0, 0);

@@ -9,12 +9,18 @@
 #include <thread>
 
 struct Vertex {
-	glm::vec3 pos;         
-	glm::u16vec2 texCoord;
+	uint8_t posX;   // x component, range 0-31
+	uint8_t posY;   // y component, range 0-31
+	uint8_t posZ;   // z component, range 0-31
+	glm::vec2 texCoord;
 	char normal;
-
+	
 	Vertex(glm::vec3 pos, glm::vec2 texCoord, char normal)
-		: pos(pos), texCoord(glm::u16vec2(texCoord * 65535.0f)), normal(normal) {};
+		: posX(static_cast<uint8_t>(pos.x)), 
+		posY(static_cast<uint8_t>(pos.y)), 
+		posZ(static_cast<uint8_t>(pos.z)), 
+		texCoord(texCoord),                
+		normal(normal) {};
 };
 
 struct ChunkMesh {
@@ -37,8 +43,12 @@ public:
 	bool isSolid(glm::vec3 localPos, std::unordered_map<std::tuple<int, int, int>, Chunk>& worldChunks) const;
 	static void addFace(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, int& indexOffset, glm::vec3 face[4], std::array<glm::vec2, 4>& tex, glm::vec3 pos, char dir);
 	void generateChunkMesh(std::unordered_map<std::tuple<int, int, int>, Chunk>& worldChunks);
+	void addBlock(glm::vec3 pos, BLOCKS block, std::unordered_map<std::tuple<int, int, int>, Chunk>& worldChunks);
+	void removeBlock(glm::vec3 pos, std::unordered_map<std::tuple<int, int, int>, Chunk>& worldChunks);
 
 public:
+	int indexOffset = 0;
+
 	int size;
 	bool dirty; // pre-delete
 	bool ready; // all set for render

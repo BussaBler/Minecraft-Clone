@@ -19,11 +19,17 @@ struct Frustum {
     glm::vec4 planes[6]; // Left, Right, Top, Bottom, Near, Far
 };
 
+struct HitResult {
+    glm::vec3 pos;
+    int face;
+};
+
 class Game {
 public:
     void update(VkDevice device);
     void addChunks(VkDevice device);
     void initGame(VkDevice device);
+    HitResult raycastBlock();
 public:
     Camera worldCamera;
     int renderDistance = 3;

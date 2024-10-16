@@ -159,3 +159,77 @@ void Game::addChunks(VkDevice device) {
 		}
 	}
 }
+
+// based on a DDA algorithm
+HitResult Game::raycastBlock() {
+    glm::vec3 rayOrigin = this->worldCamera.pos;
+    glm::vec3 rayDir = glm::normalize(this->worldCamera.forwards);  
+
+    glm::vec3 blockPos = glm::floor(rayOrigin);  
+    glm::vec3 rayDelta = glm::abs(1.0f / rayDir);  
+
+    glm::ivec3 step;  
+    glm::vec3 sideDist;  
+
+    for (int i = 0; i < 3; i++) {
+        if (rayDir[i] < 0) {
+            step[i] = -1;
+            sideDist[i] = (rayOrigin[i] - blockPos[i]) * rayDelta[i];
+        }
+        else {
+            step[i] = 1;
+            sideDist[i] = (blockPos[i] + 1.0f - rayOrigin[i]) * rayDelta[i];
+        }
+    }
+
+    float rayLength = 100.0f;
+    int maxSteps = static_cast<int>(rayLength / glm::length(rayDir));
+    int faceHit = -1;
+
+    for (int i = 0; i < maxSteps; i++) {
+        
+        glm::vec3 currentChunkPos = floor(blockPos / (float)CHUNK_SIZE);
+        std::tuple<int, int, int> currentChunkTuple = { currentChunkPos.x, currentChunkPos.y, currentChunkPos.z };
+
+        auto chunkIt = worldChunks.find(currentChunkTuple);
+        if (chunkIt != worldChunks.end()) {
+            Chunk& chunk = chunkIt->second;
+
+            glm::vec3 chunkWorldPos = currentChunkPos * static_cast<float>(CHUNK_SIZE);
+            glm::vec3 localBlockPos = blockPos - chunkWorldPos;
+
+            if (localBlockPos.x >= 0 && localBlockPos.x < CHUNK_SIZE &&
+                localBlockPos.y >= 0 && localBlockPos.y < CHUNK_SIZE &&
+                localBlockPos.z >= 0 && localBlockPos.z < CHUNK_SIZE) {
+
+                int blockIndex = static_cast<int>(localBlockPos.x) +
+                    static_cast<int>(localBlockPos.y) * CHUNK_SIZE +
+                    static_cast<int>(localBlockPos.z) * CHUNK_SIZE * CHUNK_SIZE;
+
+                if (blockIndex >= 0 && blockIndex < chunk.blocks.size() && chunk.blocks[blockIndex] != AIR_BLOCK) {
+                    return { blockPos, faceHit };
+                }
+            }
+        }
+
+        // traverse the grid based on the shortest distance to the next boundary (x, y, or z)
+        if (sideDist.x < sideDist.y && sideDist.x < sideDist.z) {
+            blockPos.x += step.x;
+            sideDist.x += rayDelta.x;
+            faceHit = (step.x == 1) ? 0 : 1;  // left or right face
+        }
+        else if (sideDist.y < sideDist.z) {
+            blockPos.y += step.y;
+            sideDist.y += rayDelta.y;
+            faceHit = (step.y == 1) ? 2 : 3;  // back or front face
+        }
+        else {
+            blockPos.z += step.z;
+            sideDist.z += rayDelta.z;
+            faceHit = (step.z == 1) ? 4 : 5;  // bottom or top face
+        }
+    }
+
+    return { glm::vec3(-1), -1 };
+}
+
