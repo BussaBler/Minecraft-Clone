@@ -3,7 +3,7 @@
 void Game::initGame(VkDevice device) {
 	for (int x = -renderDistance; x <= renderDistance; ++x) {
 		for (int y = -renderDistance; y < renderDistance; ++y) {
-            for (int z = -1; z < 1; z++) {
+            for (int z = -renderDistance; z < renderDistance; z++) {
                 this->chunksQueue.emplace(x, y, z);
             }
 		}
@@ -112,7 +112,7 @@ void Game::addChunks(VkDevice device) {
 		lastChunkPos = currentChunkPos;
         for (int x = -renderDistance; x <= renderDistance; ++x) {
             for (int y = -renderDistance; y < renderDistance; ++y) {
-                for (int z = -1; z < 1; z++) {
+                for (int z = -renderDistance; z < renderDistance; z++) {
                     this->chunksQueue.emplace(currentChunkPos.x + x, currentChunkPos.y + y, currentChunkPos.z + z);
                 }
             }
@@ -207,7 +207,7 @@ HitResult Game::raycastBlock() {
                     static_cast<int>(localBlockPos.z) * CHUNK_SIZE * CHUNK_SIZE;
 
                 if (blockIndex >= 0 && blockIndex < chunk.blocks.size() && chunk.blocks[blockIndex] != AIR_BLOCK) {
-                    return { blockPos, faceHit };
+                    return { blockPos, faceHit, chunk.blocks[blockIndex] };
                 }
             }
         }

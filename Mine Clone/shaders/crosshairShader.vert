@@ -20,8 +20,13 @@ layout(push_constant) uniform PushConstantData {
 } chunkData;
 
 void main() {
-    vec3 worldPos = inPosition + chunkData.pos.xyz * 32;
-    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(worldPos, 1.0);
+    float aspectRatio = float(ubo.height) / float(ubo.width);
+    float scale = 0.1;
+    // Adjust the x component by the aspect ratio
+    vec2 adjustedPosition = vec2((inPosition.x - 0.5) * aspectRatio * scale, (inPosition.z - 0.5) * scale);
+
+    gl_Position = vec4(adjustedPosition, 0.0, 1.0);
+
     fragTexCoord = inTexCoord;
     outNormal = inNormal;
 }

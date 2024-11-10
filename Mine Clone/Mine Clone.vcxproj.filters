@@ -47,6 +47,18 @@
     <None Include="shaders\shader.vert">
       <Filter>Source Files\shaders</Filter>
     </None>
+    <None Include="shaders\liquidShader.vert">
+      <Filter>Source Files\shaders</Filter>
+    </None>
+    <None Include="shaders\crosshairShader.vert">
+      <Filter>Source Files\shaders</Filter>
+    </None>
+    <None Include="shaders\wireframeShader.vert">
+      <Filter>Source Files\shaders</Filter>
+    </None>
+    <None Include="shaders\wireframeShader.frag">
+      <Filter>Source Files\shaders</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="VkContext.h">

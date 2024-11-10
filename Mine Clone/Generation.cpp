@@ -4,10 +4,11 @@
 static OSN::Noise<2> noise2D;
 static OSN::Noise<3> noise3D;
 
-std::array<Noise, 2> surfaceSettings = { Noise(0.01f, 20.0f, 0), Noise(0.1f, 3.0f, 0) };
+std::array<Noise, 2> surfaceSettings = { Noise(0.01f, 20.0f, 0), Noise(0.05f, 3.0f, 0) };
 std::array<Noise, 1> caveSettings = { Noise(0.05f, 1.0f, 0, 100, 0.5f) };
 std::array<Noise, 1> oreSettings = { Noise(0.05f, 1.0f, 8.54f, 0, 0.75f, COAL_ORE_BLOCK) };
 std::array<Noise, 1> treeSettings = { Noise(4.25f, 1.0f, 8.54f, 0, 0.75f) };
+const int waterLevel = 10;
 
 void Generation::generateChunkData(std::vector<BLOCKS>& blocks, glm::vec3& pos, int size) {
     blocks.resize(size * size * size, AIR_BLOCK);
@@ -50,7 +51,10 @@ void Generation::generateChunkData(std::vector<BLOCKS>& blocks, glm::vec3& pos, 
                 }
 
                 if (z + startZ > noiseZ) {
-                    blocks[index] = AIR_BLOCK; 
+                    if (z + startZ <= waterLevel)
+                        blocks[index] = WATER_BLOCK;
+                    else 
+                        blocks[index] = AIR_BLOCK; 
                 }
                 else if (cave) {
                     blocks[index] = AIR_BLOCK; 
@@ -170,13 +174,34 @@ void Generation::generateTrees(std::vector<BLOCKS>& blocks, glm::vec3& pos, int 
                     (float)(y + startY) * surfaceSettings[i].frequency) * surfaceSettings[i].amplitude;
             }
 
+            if (noiseZ < waterLevel)
+                continue;
+
             float noiseTreeVal = noise2D.eval(
                 (float)((x + startX) * treeSettings[0].frequency) + treeSettings[0].offset,
                 (float)((y + startY) * treeSettings[0].frequency) + treeSettings[0].offset
             ) * treeSettings[0].amplitude;
 
             for (int z = -6; z < size + 6; z++) {
-                if (noiseTreeVal > treeSettings[0].probability && z + startZ == noiseZ) {
+                bool cave = false;
+                for (int i = 0; i < caveSettings.size(); i++) {
+                    if (z + startZ > caveSettings[i].maxHeight)
+                        continue;
+
+                    float caveNoiseVal = noise3D.eval(
+                        (float)((x + startX) * caveSettings[i].frequency) + caveSettings[i].offset,
+                        (float)((y + startY) * caveSettings[i].frequency) + caveSettings[i].offset,
+                        (float)((z + startZ) * caveSettings[i].frequency) + caveSettings[i].offset
+                    ) * caveSettings[i].amplitude;
+
+                    if (caveNoiseVal > caveSettings[i].probability) {
+                        cave = true;
+                        break;
+                    }
+
+                }
+
+                if (noiseTreeVal > treeSettings[0].probability && z + startZ == noiseZ && !cave) {
                     placeTree(x, y, z + 1, blocks, size);
                 }
             }

@@ -12,16 +12,11 @@ layout(location = 0) in uvec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in int inNormal;
 
-layout(location = 1) out vec2 fragTexCoord;
-layout(location = 2) out int outNormal;
-
 layout(push_constant) uniform PushConstantData {
     vec4 pos;
 } chunkData;
 
 void main() {
-    vec3 worldPos = inPosition + chunkData.pos.xyz * 32;
+    vec3 worldPos = inPosition + chunkData.pos.xyz;
     gl_Position = ubo.proj * ubo.view * ubo.model * vec4(worldPos, 1.0);
-    fragTexCoord = inTexCoord;
-    outNormal = inNormal;
 }

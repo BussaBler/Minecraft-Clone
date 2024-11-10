@@ -152,8 +152,12 @@
     <ClCompile Include="VkContext.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="shaders\crosshairShader.vert" />
+    <None Include="shaders\liquidShader.vert" />
     <None Include="shaders\shader.frag" />
     <None Include="shaders\shader.vert" />
+    <None Include="shaders\wireframeShader.frag" />
+    <None Include="shaders\wireframeShader.vert" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Block.h" />

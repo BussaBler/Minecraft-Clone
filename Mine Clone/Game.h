@@ -22,6 +22,7 @@ struct Frustum {
 struct HitResult {
     glm::vec3 pos;
     int face;
+    BLOCKS block;
 };
 
 class Game {
@@ -37,6 +38,9 @@ public:
     float lastFrame = 0;
     float deltaTime = 0;
     std::unordered_map<std::tuple<int, int, int>, Chunk> worldChunks;
+    std::unordered_map<std::tuple<int, int, int>, BLOCKS*> worldChunksData;
     std::queue<glm::vec3> chunksQueue;
+    std::queue<glm::vec3> chunksDataQueue;
+    BLOCKS selectedBlock = DIRT_BLOCK;
 };
 

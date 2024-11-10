@@ -19,9 +19,16 @@ layout(push_constant) uniform PushConstantData {
     vec4 pos;
 } chunkData;
 
+const int waterFrames = 32;
+const float animationTime = 8;
+const int waterTexIdx = 8;
+
 void main() {
-    vec3 worldPos = inPosition + chunkData.pos.xyz * 32;
+    vec3 adjPos = inNormal == 5 ? vec3(inPosition.xy, inPosition.z - 0.1) : inPosition;
+    vec3 worldPos = adjPos + chunkData.pos.xyz * 32;
     gl_Position = ubo.proj * ubo.view * ubo.model * vec4(worldPos, 1.0);
-    fragTexCoord = inTexCoord;
+    int frameIndex = int(floor(mod(chunkData.pos.w, animationTime) / animationTime * waterFrames));
+    vec2 adjTex = inNormal == 5 ? vec2(inTexCoord.x + (16.0f / 1024.0f) * frameIndex, inTexCoord.y) : inTexCoord;
+    fragTexCoord = adjTex;
     outNormal = inNormal;
 }

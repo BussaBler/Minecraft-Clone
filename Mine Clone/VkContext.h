@@ -41,7 +41,11 @@ public:
     VkRenderPass renderPass;
     VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
-    VkPipeline graphicsPipeline;
+    VkPipeline mainPipeline;
+    VkPipelineCache pipelineCache;
+    VkPipeline liquidPipeline; // used for the liquid blocks don't know what will do with glasses and etc
+    VkPipeline crosshairPipeline; // a pipeline just for the crosshair ????
+    VkPipeline wireframePipeline;
 
     VkCommandPool commandPool;
 
@@ -57,14 +61,18 @@ public:
 
     VkBuffer vertexStagingBuffer;
     VkDeviceMemory vertexStagingBufferMemory;
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
+    VkBuffer crosshairVertexBuffer;
+    VkDeviceMemory crosshairVertexBufferMemory;
+    VkBuffer wireframeVertexBuffer;
+    VkDeviceMemory wireframeVertexBufferMemory;
     size_t currentVertexBufferSize;
 
     VkBuffer indexStagingBuffer;
     VkDeviceMemory indexStagingBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+    VkBuffer crosshairIndexBuffer;
+    VkDeviceMemory crosshairIndexBufferMemory;
+    VkBuffer wireframeIndexBuffer;
+    VkDeviceMemory wireframeIndexBufferMemory;
     size_t currentIndexBufferSize;
 
     std::vector<VkBuffer> uniformBuffers;

@@ -16,6 +16,7 @@ float fov = 45.0f;
 
 bool mouseLeft = false;
 bool mouseRight = false;
+bool mouseMiddle = false;
 
 #ifdef NDEBUG
 const bool enableValidationLayers = false;
@@ -45,6 +46,9 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+    int width;
+    int height;
+    int padding[2];
 };
 
 /// 
@@ -56,7 +60,8 @@ const std::vector<const char*> validationLayers = {
 };
 
 const std::vector<const char*> deviceExtensions = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    VK_EXT_BLEND_OPERATION_ADVANCED_EXTENSION_NAME
 };
 
 static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
@@ -184,11 +189,20 @@ void VkContext::processInput(GLFWwindow* pWindow, Game* pGame) {
             localBlockPos.y = static_cast<int>(localBlockPos.y) % CHUNK_SIZE;
             localBlockPos.z = static_cast<int>(localBlockPos.z) % CHUNK_SIZE;
 
-            chunk.addBlock(localBlockPos, DIRT_BLOCK, pGame->worldChunks);
+            chunk.addBlock(localBlockPos, pGame->selectedBlock, pGame->worldChunks);
         }
     }
 
     mouseRight = isMouseRightPressed;
+
+    bool isMouseMiddlePressed = glfwGetMouseButton(pWindow, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+
+    if (isMouseMiddlePressed && !mouseMiddle) {
+        HitResult result = pGame->raycastBlock();
+        if (result.face >= 0) {
+            pGame->selectedBlock = result.block;
+        }
+    }
 }
 
 void VkContext::initWindow(VkContext* pContext, Game* pGame) {
@@ -268,7 +282,7 @@ static void createInstance(VkContext* pContext) {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;
+    appInfo.apiVersion = VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -454,6 +468,9 @@ static void createLogicalDevice(VkContext* pContext) {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
+    deviceFeatures.logicOp = VK_TRUE;
+    deviceFeatures.fillModeNonSolid = VK_TRUE;
+    deviceFeatures.wideLines = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -582,7 +599,7 @@ static VkImageView createImageView(VkImage image, VkFormat format, VkImageAspect
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = mipLevels;
+    viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
@@ -839,7 +856,6 @@ static void createGraphicsPipeline(VkContext* pContext) {
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -855,7 +871,7 @@ static void createGraphicsPipeline(VkContext* pContext) {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; 
     pushConstantRange.offset = 0;     
-    pushConstantRange.size = sizeof(glm::vec3);
+    pushConstantRange.size = sizeof(glm::vec4);
 
     std::vector<VkDynamicState> dynamicStates = {
         VK_DYNAMIC_STATE_VIEWPORT,
@@ -879,6 +895,7 @@ static void createGraphicsPipeline(VkContext* pContext) {
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.flags = VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT;
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = shaderStages;
     pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -894,12 +911,177 @@ static void createGraphicsPipeline(VkContext* pContext) {
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
-    if (vkCreateGraphicsPipelines(pContext->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pContext->graphicsPipeline) != VK_SUCCESS) {
+    VkPipelineCacheCreateInfo cacheInfo{};
+    cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+
+    vkCreatePipelineCache(pContext->device, &cacheInfo, nullptr, &pContext->pipelineCache);
+
+    if (vkCreateGraphicsPipelines(pContext->device, pContext->pipelineCache, 1, &pipelineInfo, nullptr, &pContext->mainPipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
-
-    vkDestroyShaderModule(pContext->device, fragShaderModule, nullptr);
+    
     vkDestroyShaderModule(pContext->device, vertShaderModule, nullptr);
+
+    auto liquidVertShaderCode = readFile("shaders/liquidVert.spv");
+
+    VkShaderModule liquidVertShaderModule = createShaderModule(liquidVertShaderCode, pContext);
+
+    VkPipelineShaderStageCreateInfo liquidVertShaderStageInfo{};
+    liquidVertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    liquidVertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    liquidVertShaderStageInfo.module = liquidVertShaderModule;
+    liquidVertShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo liquidShaderStages[] = { liquidVertShaderStageInfo, fragShaderStageInfo };
+
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo transparentColorBlending = colorBlending;
+    transparentColorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo liquidPipelineInfo{};
+    liquidPipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    liquidPipelineInfo.flags = VK_PIPELINE_CREATE_DERIVATIVE_BIT;
+    liquidPipelineInfo.stageCount = 2;
+    liquidPipelineInfo.pStages = liquidShaderStages;
+    liquidPipelineInfo.pVertexInputState = &vertexInputInfo;
+    liquidPipelineInfo.pInputAssemblyState = &inputAssembly;
+    liquidPipelineInfo.pViewportState = &viewportState;
+    liquidPipelineInfo.pRasterizationState = &rasterizer;
+    liquidPipelineInfo.pMultisampleState = &multisampling;
+    liquidPipelineInfo.pDepthStencilState = &depthStencil;
+    liquidPipelineInfo.pColorBlendState = &transparentColorBlending;
+    liquidPipelineInfo.pDynamicState = &dynamicState;
+    liquidPipelineInfo.layout = pContext->pipelineLayout;
+    liquidPipelineInfo.renderPass = pContext->renderPass;
+    liquidPipelineInfo.subpass = 0;
+    liquidPipelineInfo.basePipelineHandle = pContext->mainPipeline;
+    liquidPipelineInfo.basePipelineIndex = -1;
+
+    if (vkCreateGraphicsPipelines(pContext->device, pContext->pipelineCache, 1, &liquidPipelineInfo, nullptr, &pContext->liquidPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create liquid graphics pipeline!");
+    }
+
+    vkDestroyShaderModule(pContext->device, liquidVertShaderModule, nullptr);
+
+    auto crosshairVertShaderCode = readFile("shaders/crosshairVert.spv");
+
+    VkShaderModule crosshairVertShaderModule = createShaderModule(crosshairVertShaderCode, pContext);
+
+    VkPipelineShaderStageCreateInfo crosshairVertShaderStageInfo{};
+    crosshairVertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    crosshairVertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    crosshairVertShaderStageInfo.module = crosshairVertShaderModule;
+    crosshairVertShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo crosshairShaderStages[] = { crosshairVertShaderStageInfo, fragShaderStageInfo };
+
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_INVERT_RGB_EXT;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_INVERT_RGB_EXT;
+
+    VkPipelineColorBlendAdvancedStateCreateInfoEXT advancedBlendState = {};
+    advancedBlendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_ADVANCED_STATE_CREATE_INFO_EXT;
+    advancedBlendState.srcPremultiplied = VK_FALSE;
+    advancedBlendState.dstPremultiplied = VK_FALSE;
+    advancedBlendState.blendOverlap = VK_BLEND_OVERLAP_UNCORRELATED_EXT;
+
+    VkPipelineColorBlendStateCreateInfo crosshairColorBlending = colorBlending;
+    crosshairColorBlending.pAttachments = &colorBlendAttachment;
+    crosshairColorBlending.pNext = &advancedBlendState;
+
+    VkGraphicsPipelineCreateInfo crosshairPipelineInfo{};
+    crosshairPipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    crosshairPipelineInfo.flags = VK_PIPELINE_CREATE_DERIVATIVE_BIT;
+    crosshairPipelineInfo.stageCount = 2;
+    crosshairPipelineInfo.pStages = crosshairShaderStages;
+    crosshairPipelineInfo.pVertexInputState = &vertexInputInfo;
+    crosshairPipelineInfo.pInputAssemblyState = &inputAssembly;
+    crosshairPipelineInfo.pViewportState = &viewportState;
+    crosshairPipelineInfo.pRasterizationState = &rasterizer;
+    crosshairPipelineInfo.pMultisampleState = &multisampling;
+    crosshairPipelineInfo.pDepthStencilState = &depthStencil;
+    crosshairPipelineInfo.pColorBlendState = &crosshairColorBlending;
+    crosshairPipelineInfo.pDynamicState = &dynamicState;
+    crosshairPipelineInfo.layout = pContext->pipelineLayout;
+    crosshairPipelineInfo.renderPass = pContext->renderPass;
+    crosshairPipelineInfo.subpass = 0;
+    crosshairPipelineInfo.basePipelineHandle = pContext->mainPipeline;
+    crosshairPipelineInfo.basePipelineIndex = -1;
+
+    if (vkCreateGraphicsPipelines(pContext->device, pContext->pipelineCache, 1, &crosshairPipelineInfo, nullptr, &pContext->crosshairPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create crosshair graphics pipeline!");
+    }
+
+    vkDestroyShaderModule(pContext->device, crosshairVertShaderModule, nullptr);
+
+    auto wireframeVertShaderCode = readFile("shaders/wireframeVert.spv");
+    auto wireframeFragShaderCode = readFile("shaders/wireframeFrag.spv");
+
+    VkShaderModule wireframeVertShaderModule = createShaderModule(wireframeVertShaderCode, pContext);
+
+    VkPipelineShaderStageCreateInfo wireframeVertShaderStageInfo{};
+    wireframeVertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    wireframeVertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    wireframeVertShaderStageInfo.module = wireframeVertShaderModule;
+    wireframeVertShaderStageInfo.pName = "main";
+
+    VkShaderModule wireframeFragShaderModule = createShaderModule(wireframeFragShaderCode, pContext);
+
+    VkPipelineShaderStageCreateInfo wireframeFragShaderStageInfo{};
+    wireframeFragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    wireframeFragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    wireframeFragShaderStageInfo.module = wireframeFragShaderModule;
+    wireframeFragShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo wireframeShaderStages[] = { wireframeVertShaderStageInfo, wireframeFragShaderStageInfo };
+
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+    rasterizer.lineWidth = 2.0f;
+
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo wireframeColorBlending = colorBlending;
+    wireframeColorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo wireframePipelineInfo{};
+    wireframePipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    wireframePipelineInfo.flags = VK_PIPELINE_CREATE_DERIVATIVE_BIT;
+    wireframePipelineInfo.stageCount = 2;
+    wireframePipelineInfo.pStages = wireframeShaderStages;
+    wireframePipelineInfo.pVertexInputState = &vertexInputInfo;
+    wireframePipelineInfo.pInputAssemblyState = &inputAssembly;
+    wireframePipelineInfo.pViewportState = &viewportState;
+    wireframePipelineInfo.pRasterizationState = &rasterizer;
+    wireframePipelineInfo.pMultisampleState = &multisampling;
+    wireframePipelineInfo.pDepthStencilState = &depthStencil;
+    wireframePipelineInfo.pColorBlendState = &wireframeColorBlending;
+    wireframePipelineInfo.pDynamicState = &dynamicState;
+    wireframePipelineInfo.layout = pContext->pipelineLayout;
+    wireframePipelineInfo.renderPass = pContext->renderPass;
+    wireframePipelineInfo.subpass = 0;
+    wireframePipelineInfo.basePipelineHandle = pContext->mainPipeline;
+    wireframePipelineInfo.basePipelineIndex = -1;
+
+    if (vkCreateGraphicsPipelines(pContext->device, pContext->pipelineCache, 1, &wireframePipelineInfo, nullptr, &pContext->wireframePipeline) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create crosshair graphics pipeline!");
+    }
+
+    vkDestroyShaderModule(pContext->device, wireframeVertShaderModule, nullptr);
+    vkDestroyShaderModule(pContext->device, wireframeFragShaderModule, nullptr);
+    vkDestroyShaderModule(pContext->device, fragShaderModule, nullptr);
 }
 
 static void createCommandPool(VkContext* pContext) {
@@ -935,7 +1117,7 @@ static void createImage(uint32_t width, uint32_t height, VkFormat format, VkImag
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = mipLevels;
+    imageInfo.mipLevels = 1;
     imageInfo.arrayLayers = 1;
     imageInfo.format = format;
     imageInfo.tiling = tiling;
@@ -1065,7 +1247,7 @@ static void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout 
     barrier.image = image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = mipLevels;
+    barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
@@ -1125,98 +1307,11 @@ static void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
     endSingleTimeCommands(commandBuffer, pContext);
 }
 
-static void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels, VkContext* pContext) {
-    // Check if image format supports linear blitting
-    VkFormatProperties formatProperties;
-    vkGetPhysicalDeviceFormatProperties(pContext->physicalDevice, imageFormat, &formatProperties);
-
-    if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-        throw std::runtime_error("texture image format does not support linear blitting!");
-    }
-
-    VkCommandBuffer commandBuffer = beginSingleTimeCommands(pContext);
-
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = image;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.subresourceRange.levelCount = 1;
-
-    int32_t mipWidth = texWidth;
-    int32_t mipHeight = texHeight;
-
-    for (uint32_t i = 1; i < mipLevels; i++) {
-        barrier.subresourceRange.baseMipLevel = i - 1;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-        vkCmdPipelineBarrier(commandBuffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier);
-
-        VkImageBlit blit{};
-        blit.srcOffsets[0] = { 0, 0, 0 };
-        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
-        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.srcSubresource.mipLevel = i - 1;
-        blit.srcSubresource.baseArrayLayer = 0;
-        blit.srcSubresource.layerCount = 1;
-        blit.dstOffsets[0] = { 0, 0, 0 };
-        blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
-        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.dstSubresource.mipLevel = i;
-        blit.dstSubresource.baseArrayLayer = 0;
-        blit.dstSubresource.layerCount = 1;
-
-        vkCmdBlitImage(commandBuffer,
-            image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit,
-            VK_FILTER_LINEAR);
-
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(commandBuffer,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-            0, nullptr,
-            0, nullptr,
-            1, &barrier);
-
-        if (mipWidth > 1) mipWidth /= 2;
-        if (mipHeight > 1) mipHeight /= 2;
-    }
-
-    barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    vkCmdPipelineBarrier(commandBuffer,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-        0, nullptr,
-        0, nullptr,
-        1, &barrier);
-
-    endSingleTimeCommands(commandBuffer, pContext);
-}
-
 static void createTextureImage(VkContext* pContext) {
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load("textures/atlas.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     VkDeviceSize imageSize = texWidth * texHeight * 4;
-    pContext->mipLevels = static_cast<uint32_t>(std::floor(std::log2((std::max(texWidth, texHeight))))) + 1;
+    pContext->mipLevels = 1;
 
     if (!pixels) {
         throw std::runtime_error("failed to load texture image!");
@@ -1233,16 +1328,14 @@ static void createTextureImage(VkContext* pContext) {
 
     stbi_image_free(pixels);
 
-    createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->textureImage, pContext->textureImageMemory, pContext, pContext->mipLevels);
+    createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->textureImage, pContext->textureImageMemory, pContext, pContext->mipLevels);
 
     transitionImageLayout(pContext->textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, pContext, pContext->mipLevels);
     copyBufferToImage(stagingBuffer, pContext->textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), pContext);
-    //transitionImageLayout(pContext->textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pContext);
+    transitionImageLayout(pContext->textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, pContext, pContext->mipLevels);
 
     vkDestroyBuffer(pContext->device, stagingBuffer, nullptr);
     vkFreeMemory(pContext->device, stagingBufferMemory, nullptr);
-
-    generateMipmaps(pContext->textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, pContext->mipLevels, pContext);
 }
 
 static void createTextureImageView(VkContext* pContext) {
@@ -1267,7 +1360,9 @@ static void createTextureSampler(VkContext* pContext) {
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
 
     if (vkCreateSampler(pContext->device, &samplerInfo, nullptr, &pContext->textureSampler) != VK_SUCCESS) {
         throw std::runtime_error("failed to create texture sampler!");
@@ -1282,6 +1377,131 @@ static void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size
     vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
     endSingleTimeCommands(commandBuffer, pContext);
+}
+
+std::array<Vertex, 4> crosshairVertices = {
+    Vertex{glm::vec3(0, 0, 0), glm::vec2(0, 16.f / 1024.f), 0},
+    {glm::vec3(1, 0, 0), glm::vec2(16.f / 1024.f, 16.f / 1024.f), 0},
+    {glm::vec3(1, 0, 1), glm::vec2(16.f / 1024.f, 32.f / 1024.f), 0},
+    {glm::vec3(0, 0, 1), glm::vec2(0, 32.f / 1024.f), 0},
+};
+
+std::array<uint32_t, 6> crosshairIndices = {
+    0, 3, 2,
+    2, 1, 0
+};
+
+std::array<Vertex, 8> cubeVertices = {
+    // Front Bottom Left
+    Vertex(glm::vec3(-0.001f, -0.001f, -0.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Front Bottom Right
+    Vertex(glm::vec3(1.001f, -0.001f, -0.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Front Top Right
+    Vertex(glm::vec3(1.0f, 1.001f, -0.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Front Top Left
+    Vertex(glm::vec3(-0.001f, 1.001f, -0.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Back Bottom Left
+    Vertex(glm::vec3(-0.001f, -0.001f, 1.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Back Bottom Right
+    Vertex(glm::vec3(1.0f, -0.001f, 1.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Back Top Right
+    Vertex(glm::vec3(1.001f, 1.001f, 1.001f), glm::vec2(0.0f, 0.0f), 0),
+    // Back Top Left
+    Vertex(glm::vec3(-0.001f, 1.001f, 1.001f), glm::vec2(0.0f, 0.0f), 0)
+};
+
+std::array<uint32_t, 24> cubeIndices = {
+    // Front face edges
+    0, 1,  // Bottom edge
+    1, 2,  // Right edge
+    2, 3,  // Top edge
+    3, 0,  // Left edge
+
+    // Back face edges
+    4, 5,  // Bottom edge
+    5, 6,  // Right edge
+    6, 7,  // Top edge
+    7, 4,  // Left edge
+
+    // Connecting edges
+    0, 4,  // Front bottom to back bottom
+    1, 5,  // Front bottom right to back bottom right
+    2, 6,  // Front top right to back top right
+    3, 7   // Front top left to back top left
+};
+
+static void createVertexBuffer(VkContext* pContext) {
+    // CROSSHAIR
+    VkDeviceSize bufferSize = sizeof(crosshairVertices[0]) * crosshairVertices.size();
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory, pContext);
+
+    void* data;
+    vkMapMemory(pContext->device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, crosshairVertices.data(), (size_t)bufferSize);
+    vkUnmapMemory(pContext->device, stagingBufferMemory);
+
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->crosshairVertexBuffer, pContext->crosshairVertexBufferMemory, pContext);
+
+    copyBuffer(stagingBuffer, pContext->crosshairVertexBuffer, bufferSize, pContext);
+
+    vkDestroyBuffer(pContext->device, stagingBuffer, nullptr);
+    vkFreeMemory(pContext->device, stagingBufferMemory, nullptr);
+
+    //WIREFRAME CUBE
+
+    bufferSize = sizeof(cubeVertices[0]) * cubeVertices.size();
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory, pContext);
+
+    vkMapMemory(pContext->device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, cubeVertices.data(), (size_t)bufferSize);
+    vkUnmapMemory(pContext->device, stagingBufferMemory);
+
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->wireframeVertexBuffer, pContext->wireframeVertexBufferMemory, pContext);
+
+    copyBuffer(stagingBuffer, pContext->wireframeVertexBuffer, bufferSize, pContext);
+
+    vkDestroyBuffer(pContext->device, stagingBuffer, nullptr);
+    vkFreeMemory(pContext->device, stagingBufferMemory, nullptr);
+}
+
+static void createIndexBuffer(VkContext* pContext) {
+    // CROSSHAIR
+    VkDeviceSize bufferSize = sizeof(crosshairIndices[0]) * crosshairIndices.size();
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory, pContext);
+
+    void* data;
+    vkMapMemory(pContext->device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, crosshairIndices.data(), (size_t)bufferSize);
+    vkUnmapMemory(pContext->device, stagingBufferMemory);
+
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->crosshairIndexBuffer, pContext->crosshairIndexBufferMemory, pContext);
+
+    copyBuffer(stagingBuffer, pContext->crosshairIndexBuffer, bufferSize, pContext);
+
+    vkDestroyBuffer(pContext->device, stagingBuffer, nullptr);
+    vkFreeMemory(pContext->device, stagingBufferMemory, nullptr);
+
+    //WIREFRAME CUBE
+    bufferSize = sizeof(cubeIndices[0]) * cubeIndices.size();
+
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory, pContext);
+
+    vkMapMemory(pContext->device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, cubeIndices.data(), (size_t)bufferSize);
+    vkUnmapMemory(pContext->device, stagingBufferMemory);
+
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pContext->wireframeIndexBuffer, pContext->wireframeIndexBufferMemory, pContext);
+
+    copyBuffer(stagingBuffer, pContext->wireframeIndexBuffer, bufferSize, pContext);
+
+    vkDestroyBuffer(pContext->device, stagingBuffer, nullptr);
+    vkFreeMemory(pContext->device, stagingBufferMemory, nullptr);
 }
 
 static void createStagingBuffersForChunk(VkContext* pContext) {
@@ -1314,6 +1534,8 @@ static void createStagingBuffersForChunk(VkContext* pContext) {
 static void createBuffersForChunk(VkContext* pContext, Chunk& chunk) {
     size_t vertexBufferSize = chunk.mesh.vertices.size() * sizeof(Vertex);
     size_t indexBufferSize = chunk.mesh.indices.size() * sizeof(uint32_t);
+    size_t transparentVertexBufferSize = chunk.transparentMesh.vertices.size() * sizeof(Vertex);
+    size_t transparentIndexBufferSize = chunk.transparentMesh.indices.size() * sizeof(uint32_t);
 
     size_t maxVertexBufferSize = chunk.size * chunk.size * chunk.size * sizeof(Vertex) * 24;
     size_t maxIndexBufferSize = chunk.size * chunk.size * chunk.size * sizeof(uint32_t) * 36;
@@ -1334,6 +1556,23 @@ static void createBuffersForChunk(VkContext* pContext, Chunk& chunk) {
         chunk.indexBufferMemory,
         pContext);
 
+    if (chunk.liquidVertexBuffer == VK_NULL_HANDLE && transparentVertexBufferSize > 0)
+        createBuffer(maxVertexBufferSize,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            chunk.liquidVertexBuffer,
+            chunk.liquidVertexBufferMemory,
+            pContext);
+
+    if (chunk.liquidIndexBuffer == VK_NULL_HANDLE && transparentVertexBufferSize > 0)
+        createBuffer(maxIndexBufferSize,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            chunk.liquidIndexBuffer,
+            chunk.liquidIndexBufferMemory,
+            pContext);
+
+
     void* vertexData;
     vkMapMemory(pContext->device, pContext->vertexStagingBufferMemory, 0, vertexBufferSize, 0, &vertexData);
 
@@ -1348,6 +1587,23 @@ static void createBuffersForChunk(VkContext* pContext, Chunk& chunk) {
 
     copyBuffer(pContext->vertexStagingBuffer, chunk.vertexBuffer, vertexBufferSize, pContext);
     copyBuffer(pContext->indexStagingBuffer, chunk.indexBuffer, indexBufferSize, pContext);
+
+    if (transparentVertexBufferSize > 0) {
+        void* transparentVertexData;
+        vkMapMemory(pContext->device, pContext->vertexStagingBufferMemory, 0, vertexBufferSize, 0, &transparentVertexData);
+
+        void* transparentIndexData;
+        vkMapMemory(pContext->device, pContext->indexStagingBufferMemory, 0, indexBufferSize, 0, &transparentIndexData);
+
+        memcpy(transparentVertexData, chunk.transparentMesh.vertices.data(), transparentVertexBufferSize);
+        memcpy(transparentIndexData, chunk.transparentMesh.indices.data(), transparentIndexBufferSize);
+
+        vkUnmapMemory(pContext->device, pContext->vertexStagingBufferMemory);
+        vkUnmapMemory(pContext->device, pContext->indexStagingBufferMemory);
+
+        copyBuffer(pContext->vertexStagingBuffer, chunk.liquidVertexBuffer, transparentVertexBufferSize, pContext);
+        copyBuffer(pContext->indexStagingBuffer, chunk.liquidIndexBuffer, transparentIndexBufferSize, pContext);
+    }
 
     chunk.ready = true; 
 }
@@ -1483,6 +1739,8 @@ void VkContext::initVulkan(VkContext* pContext, Game* pGame) {
     createTextureImageView(pContext);
     createTextureSampler(pContext);
     createStagingBuffersForChunk(pContext);
+    createVertexBuffer(pContext);
+    createIndexBuffer(pContext);
     createUniformBuffers(pContext);
     createDescriptorPool(pContext);
     createDescriptorSets(pContext);
@@ -1525,10 +1783,6 @@ static void recreateSwapChain(VkContext* pContext) {
 }
 
 static void updateUniformBuffer(uint32_t currentImage, VkContext* pContext, Game* pGame) {
-    static auto startTime = std::chrono::high_resolution_clock::now();
-
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
     UniformBufferObject ubo{};
     ubo.model = glm::mat4(1.0f);
@@ -1537,6 +1791,8 @@ static void updateUniformBuffer(uint32_t currentImage, VkContext* pContext, Game
     ubo.proj[1][1] *= -1;
     pGame->worldCamera.view = ubo.view;
     pGame->worldCamera.proj = ubo.proj;
+    ubo.width = pContext->swapChainExtent.width;
+    ubo.height = pContext->swapChainExtent.height;
 
     memcpy(pContext->uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
@@ -1565,7 +1821,7 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageInd
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pContext->graphicsPipeline);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pContext->mainPipeline);
 
     VkViewport viewport{};
     viewport.x = 0.0f;
@@ -1593,14 +1849,52 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageInd
         if (!chunk.second.ready && chunk.second.baked && chunk.second.mesh.vertices.size() > 0) {
             createBuffersForChunk(pContext, chunk.second);
         }
-        else if (chunk.second.baked && chunk.second.mesh.vertices.size() > 0) {
+        if (chunk.second.baked && chunk.second.mesh.vertices.size() > 0) {
             vertexBuffers[0] = { chunk.second.vertexBuffer };
-            vkCmdPushConstants(commandBuffer, pContext->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &chunk.second.pos);
+            glm::vec4 push = glm::vec4(chunk.second.pos, 1);
+            vkCmdPushConstants(commandBuffer, pContext->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec4), &push);
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(commandBuffer, chunk.second.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(commandBuffer, chunk.second.mesh.indices.size(), 1, 0, 0, 0);
         }
     }
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pContext->liquidPipeline);
+
+    for (auto& chunk : pGame->worldChunks) {
+        if (chunk.second.dirty || !chunk.second.visible) {
+            continue;
+        }
+        if (!chunk.second.ready && chunk.second.baked && chunk.second.transparentMesh.vertices.size() > 0) {
+            createBuffersForChunk(pContext, chunk.second);
+        }
+        if (chunk.second.baked && chunk.second.transparentMesh.vertices.size() > 0) {
+            vertexBuffers[0] = { chunk.second.liquidVertexBuffer };
+            glm::vec4 push = glm::vec4(chunk.second.pos, glfwGetTime());
+            vkCmdPushConstants(commandBuffer, pContext->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec4), &push);
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(commandBuffer, chunk.second.liquidIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(commandBuffer, chunk.second.transparentMesh.indices.size(), 1, 0, 0, 0);
+        }
+    }
+
+    HitResult result = pGame->raycastBlock();
+    if (result.face >= 0) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pContext->wireframePipeline);
+        vertexBuffers[0] = { pContext->wireframeVertexBuffer };
+        glm::vec4 push = glm::vec4(result.pos, 0);
+        vkCmdPushConstants(commandBuffer, pContext->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec4), &push);
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(commandBuffer, pContext->wireframeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(commandBuffer, cubeIndices.size(), 1, 0, 0, 0);
+    }
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pContext->crosshairPipeline);
+
+    vertexBuffers[0] = { pContext->crosshairVertexBuffer };
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, pContext->crosshairIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(commandBuffer, crosshairIndices.size(), 1, 0, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1608,8 +1902,6 @@ static void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageInd
         throw std::runtime_error("failed to record command buffer!");
     }
 }
-
-
 
 void VkContext::drawFrame(VkContext* pContext, Game* pGame) {
     vkWaitForFences(pContext->device, 1, &pContext->inFlightFences[pContext->currentFrame], VK_TRUE, UINT64_MAX);
@@ -1688,7 +1980,11 @@ static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMesse
 void VkContext::cleanup(VkContext* pContext, Game* pGame) {
     cleanupSwapChain(pContext);
 
-    vkDestroyPipeline(pContext->device, pContext->graphicsPipeline, nullptr);
+    vkDestroyPipeline(pContext->device, pContext->mainPipeline, nullptr);
+    vkDestroyPipeline(pContext->device, pContext->liquidPipeline, nullptr);
+    vkDestroyPipeline(pContext->device, pContext->crosshairPipeline, nullptr);
+    vkDestroyPipeline(pContext->device, pContext->wireframePipeline, nullptr);
+    vkDestroyPipelineCache(pContext->device, pContext->pipelineCache, nullptr);
     vkDestroyPipelineLayout(pContext->device, pContext->pipelineLayout, nullptr);
     vkDestroyRenderPass(pContext->device, pContext->renderPass, nullptr);
 
@@ -1715,11 +2011,17 @@ void VkContext::cleanup(VkContext* pContext, Game* pGame) {
 
     vkDestroyDescriptorSetLayout(pContext->device, pContext->descriptorSetLayout, nullptr);
 
-    vkDestroyBuffer(pContext->device, pContext->indexBuffer, nullptr);
-    vkFreeMemory(pContext->device, pContext->indexBufferMemory, nullptr);
+    vkDestroyBuffer(pContext->device, pContext->crosshairIndexBuffer, nullptr);
+    vkFreeMemory(pContext->device, pContext->crosshairIndexBufferMemory, nullptr);
 
-    vkDestroyBuffer(pContext->device, pContext->vertexBuffer, nullptr);
-    vkFreeMemory(pContext->device, pContext->vertexBufferMemory, nullptr);
+    vkDestroyBuffer(pContext->device, pContext->crosshairVertexBuffer, nullptr);
+    vkFreeMemory(pContext->device, pContext->crosshairVertexBufferMemory, nullptr);
+
+    vkDestroyBuffer(pContext->device, pContext->wireframeVertexBuffer, nullptr);
+    vkFreeMemory(pContext->device, pContext->wireframeVertexBufferMemory, nullptr);
+
+    vkDestroyBuffer(pContext->device, pContext->wireframeIndexBuffer, nullptr);
+    vkFreeMemory(pContext->device, pContext->wireframeIndexBufferMemory, nullptr);
 
     vkDestroyBuffer(pContext->device, pContext->vertexStagingBuffer, nullptr);
     vkFreeMemory(pContext->device, pContext->vertexStagingBufferMemory, nullptr);
